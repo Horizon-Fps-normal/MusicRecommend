@@ -30,6 +30,7 @@ import {
 import { CANDIDATES, NAV_ITEMS } from './data';
 import { buildRecommendations, buildTasteProfile, hasRealPlaylistTracks, isPreferredTrackVersion } from './recommendation';
 import { daysSince, loadState, saveState } from './storage';
+import packageInfo from '../package.json';
 
 const ICONS = { sparkles: Sparkles, library: LibraryBig, history: HistoryIcon, heart: Heart };
 
@@ -48,6 +49,15 @@ function cleanErrorMessage(error, fallback) {
 
 function isErrorNotice(message) {
   return /error|失败|无法|不可用|错误|没有找到|请检查/i.test(String(message ?? ''));
+}
+
+function mergeDiscoveryCandidates(...collections) {
+  const merged = new Map();
+  collections.flat().filter(isPreferredTrackVersion).forEach((track) => {
+    const key = String(track.id ?? track.qqMid ?? `${track.title ?? ''}::${track.artist ?? ''}`).toLowerCase();
+    if (key && !merged.has(key)) merged.set(key, track);
+  });
+  return [...merged.values()].slice(0, 1200);
 }
 
 function Cover({ track, small = false, onClick }) {
@@ -171,13 +181,13 @@ function App() {
     return () => audio.pause();
   }, [player?.src]);
 
-  const recentExcluded = useMemo(() => {
-    const ids = new Set();
-    state.history.forEach((entry) => {
-      if (daysSince(entry.createdAt) < 90) (entry.trackIds ?? entry.tracks?.map((track) => track.id) ?? []).forEach((id) => ids.add(id));
-    });
-    return ids;
-  }, [state.history]);
+  const recentHistoryTracks = useMemo(() => state.history
+    .filter((entry) => daysSince(entry.createdAt) < 90)
+    .flatMap((entry) => entry.tracks ?? []), [state.history]);
+
+  const recentExcluded = useMemo(() => new Set(state.history
+    .filter((entry) => daysSince(entry.createdAt) < 90)
+    .flatMap((entry) => entry.trackIds ?? entry.tracks?.map((track) => track.id) ?? [])), [state.history]);
 
   function commit(next) {
     setState(next);
@@ -305,17 +315,17 @@ function App() {
     });
   }
 
-  async function discoverExternalCandidates(amount) {
+  async function discoverExternalCandidates(amount, pageOffset = 0) {
     if (!usingRealPlaylist || !window.qqMusic?.discoverTracks) return [];
-    const seeds = activePlaylist.tracks.filter((track) => track.artist && track.title).slice(0, 120);
+    const seeds = activePlaylist.tracks.filter((track) => track.artist && track.title);
     if (seeds.length === 0) return [];
     try {
       return await window.qqMusic.discoverTracks({
         seeds,
-        excludedTracks: activePlaylist.tracks,
+        excludedTracks: [...activePlaylist.tracks, ...recentHistoryTracks],
         profile: tasteProfile,
-        pageStart: (Math.floor(Date.now() / 86400000) + recentExcluded.size) % 6 + 1,
-        limit: Math.max(240, amount * 30),
+        pageStart: (Math.floor(Date.now() / 86400000) + recentExcluded.size + pageOffset) % 8 + 1,
+        limit: Math.max(500, amount * 60),
       });
     } catch {
       return [];
@@ -341,10 +351,17 @@ function App() {
     const requested = Math.max(1, Math.min(40, Number(count) || 1));
     setIsGenerating(true);
     setNotice(usingRealPlaylist ? '正在综合曲风、节奏、氛围与热度寻找歌单外新歌…' : '正在匹配 QQ 音乐封面与播放信息…');
-    const externalCandidates = await discoverExternalCandidates(requested);
-    const tracks = await enrichTracks(buildDailyRecommendations(requested, recentExcluded, externalCandidates));
+    const fetchedCandidates = await discoverExternalCandidates(requested);
+    let externalCandidates = mergeDiscoveryCandidates(fetchedCandidates, state.discoveryCache ?? []);
+    let selectedTracks = buildDailyRecommendations(requested, recentExcluded, externalCandidates);
+    if (usingRealPlaylist && selectedTracks.length < requested) {
+      const extraCandidates = await discoverExternalCandidates(requested, 2);
+      externalCandidates = mergeDiscoveryCandidates(extraCandidates, externalCandidates);
+      selectedTracks = buildDailyRecommendations(requested, recentExcluded, externalCandidates);
+    }
+    const tracks = await enrichTracks(selectedTracks);
     const entry = { id: `history-${Date.now()}`, createdAt: new Date().toISOString(), source: activePlaylist?.name ?? '常听收藏', requested, trackIds: tracks.map((track) => track.id), tracks };
-    const next = { ...state, recommendations: tracks, history: [entry, ...state.history].slice(0, 50) };
+    const next = { ...state, recommendations: tracks, history: [entry, ...state.history].slice(0, 50), discoveryCache: externalCandidates };
     commit(next);
     setIsGenerating(false);
     const resultLabel = tracks.length < requested
@@ -405,7 +422,7 @@ function App() {
 
   async function replace(trackId) {
     const excluded = new Set([...state.recommendations.map((track) => track.id), trackId]);
-    const externalCandidates = await discoverExternalCandidates(8);
+    const externalCandidates = mergeDiscoveryCandidates(await discoverExternalCandidates(8), state.discoveryCache ?? []);
     const replacement = (await enrichTracks(buildDailyRecommendations(1, excluded, externalCandidates)))[0];
     if (!replacement) return;
     const tracks = state.recommendations.map((track) => track.id === trackId ? replacement : track);
@@ -520,7 +537,7 @@ function App() {
 
         {view === 'settings' && <section className="page-section"><div className="page-heading"><div><div className="section-kicker">个性化</div><h1>设置</h1><p>把音乐空间调整成你喜欢的样子。</p></div><StatusPill tone="green">全部本地保存</StatusPill></div><div className="settings-grid"><div className="settings-card"><div className="settings-card-icon"><ImagePlus size={20} /></div><div className="settings-card-copy"><h2>自定义背景</h2><p>上传本地图片作为应用背景。图片会压缩后保存在本机，不会上传到网络。</p><div className="settings-actions"><label className="primary-button upload-button"><ImagePlus size={16} />上传图片<input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleBackgroundUpload} /></label>{state.settings?.background ? <button className="text-button" onClick={removeBackground}><X size={15} />恢复默认</button> : null}</div></div></div><div className="background-preview" style={state.settings?.background ? { backgroundImage: `url("${state.settings.background}")` } : undefined}>{state.settings?.background ? <span>当前背景</span> : <><Music2 size={28} /><span>默认背景</span></>}</div></div><div className="settings-card privacy-card"><div className="settings-card-icon green-icon"><Check size={20} /></div><div className="settings-card-copy"><h2>本地优先</h2><p>推荐历史、反馈和背景图片均保存在这台电脑。QQ 音乐请求只在导入或播放时发起。</p></div></div></section>}
 
-        <footer className="app-footer"><span><span className="green-orb" />本地模式 · 数据存储在此设备</span><span>Daily Discovery v0.1</span></footer>
+        <footer className="app-footer"><span><span className="green-orb" />本地模式 · 数据存储在此设备</span><span>Daily Discovery v{packageInfo.version}</span></footer>
       </main>
       <audio ref={audioRef} className="native-audio" onTimeUpdate={(event) => setPlaybackTime(event.currentTarget.currentTime)} onLoadedMetadata={(event) => setPlaybackDuration(event.currentTarget.duration || 0)} onEnded={() => setIsPlaying(false)} />
       <PlaybackBar player={player} isPlaying={isPlaying} currentTime={playbackTime} duration={playbackDuration} onToggle={togglePlayback} onSeek={seekPlayback} onOpenWeb={() => openTrackWeb(player?.track)} onClose={() => { audioRef.current?.pause(); setPlayer(null); setIsPlaying(false); }} />

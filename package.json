@@ -1,6 +1,6 @@
 {
   "name": "daily-discovery",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "author": "Daily Discovery contributors",
   "main": "electron/main.cjs",

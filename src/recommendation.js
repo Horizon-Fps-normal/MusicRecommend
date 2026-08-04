@@ -1,10 +1,11 @@
 const DEFAULT_POPULARITY = 72;
 const MIN_POPULARITY = 45;
-const LOW_QUALITY_VERSION_PATTERN = /(?:\blive\b|live\u7248|\u73b0\u573a\u7248?|\u6f14\u5531\u4f1a|\bdj\b|dj\u7248|remix|rework|sped\s*up|speed\s*up|\u52a0\u901f|\u500d\u901f|\u5feb\u7248|\bslow(?:ed)?\b|slowed\s*\+?\s*reverb|\u6162\u901f|\u964d\u901f|\u7247\u6bb5|\u8bd5\u542c|preview|snippet|\u94c3\u58f0|\u7247\u5934|\u7247\u5c3e|\u4f34\u594f|demo)/i;
+const LOW_QUALITY_VERSION_PATTERN = /(?:\blive\b|live\u7248|\u73b0\u573a|\u5b9e\u51b5|\u6f14\u5531\u4f1a|\u5de1\u56de\u6f14\u51fa|\u97f3\u4e50\u4f1a|concert\s*(?:version|live|recording|tour)|\bdj\b|dj\u7248|remix|rework|sped\s*up|speed\s*up|\u52a0\u901f|\u500d\u901f|\u5feb\u7248|\bslow(?:ed)?\b|slowed\s*\+?\s*reverb|\u6162\u901f|\u964d\u901f|\u7247\u6bb5|\u8bd5\u542c|preview|snippet|\u94c3\u58f0|\u7247\u5934|\u7247\u5c3e|\u4f34\u594f|demo)/i;
 
 export function isPreferredTrackVersion(track) {
-  const label = `${track?.title ?? track?.songname ?? ''} ${track?.album ?? track?.albumname ?? ''}`.trim();
+  const label = `${track?.title ?? track?.songname ?? ''} ${track?.album ?? track?.albumname ?? ''}`.normalize('NFKC').trim();
   if (LOW_QUALITY_VERSION_PATTERN.test(label)) return false;
+  if (Number(track?.versionCode ?? track?.ver) === 3) return false;
   const duration = Number(track?.durationSeconds ?? track?.interval ?? 0);
   return !(Number.isFinite(duration) && duration > 0 && duration < 90);
 }

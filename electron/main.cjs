@@ -98,15 +98,12 @@ function searchSongKey(title, artist) {
   return `${String(title ?? '').trim().toLowerCase()}::${String(artist ?? '').trim().toLowerCase()}`;
 }
 
-function artistSignature(value) {
-  return String(value ?? '').trim().toLowerCase().split(/\s*[/、,&]\s*/)[0];
-}
-
-const LOW_QUALITY_VERSION_PATTERN = /(?:\blive\b|live版|现场版?|演唱会|\bdj\b|dj版|remix|rework|sped\s*up|speed\s*up|加速|倍速|快版|\bslow(?:ed)?\b|slowed\s*\+?\s*reverb|慢速|降速|片段|试听|preview|snippet|铃声|片头|片尾|伴奏|demo)/i;
+const LOW_QUALITY_VERSION_PATTERN = /(?:\blive\b|live版|现场|实况|演唱会|巡回演出|音乐会|concert\s*(?:version|live|recording|tour)|\bdj\b|dj版|remix|rework|sped\s*up|speed\s*up|加速|倍速|快版|\bslow(?:ed)?\b|slowed\s*\+?\s*reverb|慢速|降速|片段|试听|preview|snippet|铃声|片头|片尾|伴奏|demo)/i;
 
 function isPreferredSearchSong(song) {
-  const label = `${song?.songname ?? song?.title ?? ''} ${song?.albumname ?? song?.album ?? ''}`.trim();
+  const label = `${song?.songname ?? song?.title ?? ''} ${song?.albumname ?? song?.album ?? ''}`.normalize('NFKC').trim();
   if (LOW_QUALITY_VERSION_PATTERN.test(label)) return false;
+  if (Number(song?.ver) === 3) return false;
   const interval = Number(song?.interval ?? song?.durationSeconds ?? 0);
   return !(Number.isFinite(interval) && interval > 0 && interval < 90);
 }
@@ -116,15 +113,16 @@ function normalizeSearchSong(song, metadata = {}) {
   const artist = song.singername ?? ((song.singer ?? []).map((singer) => singer.name).join(' / '));
   const albumMid = song.albummid ?? song.album?.mid ?? null;
   return {
-    id: qqMid,
+    id: qqMid ?? metadata.id ?? null,
     qqMid,
     title: song.songname ?? song.name ?? '',
     artist,
     album: song.albumname ?? song.album?.name ?? '',
-    cover: albumMid ? `https://y.gtimg.cn/music/photo_new/T002R300x300M000${albumMid}.jpg` : null,
-    url: qqMid ? `https://y.qq.com/n/ryqq/songDetail/${qqMid}` : null,
+    cover: albumMid ? `https://y.gtimg.cn/music/photo_new/T002R300x300M000${albumMid}.jpg` : (metadata.cover ?? null),
+    url: qqMid ? `https://y.qq.com/n/ryqq/songDetail/${qqMid}` : (metadata.url ?? null),
     duration: song.interval ? `${Math.floor(song.interval / 60).toString().padStart(2, '0')}:${(song.interval % 60).toString().padStart(2, '0')}` : '',
     durationSeconds: Number(song.interval) || null,
+    versionCode: Number(song.ver) || null,
     playbackUrl: null,
     genre: metadata.genre ?? '待识别曲风',
     mood: metadata.mood ?? '待识别氛围',
@@ -136,13 +134,41 @@ function normalizeSearchSong(song, metadata = {}) {
   };
 }
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function mapSettledWithConcurrency(items, concurrency, mapper) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      try {
+        results[index] = { status: 'fulfilled', value: await mapper(items[index], index) };
+      } catch (reason) {
+        results[index] = { status: 'rejected', reason };
+      }
+      await delay(120);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  return results;
+}
+
 async function searchQQSongs(query, limit = 20, page = 1) {
   const safePage = Math.max(1, Math.min(20, Number(page) || 1));
   const endpoint = `https://c.y.qq.com/soso/fcgi-bin/client_search_cp?format=json&p=${safePage}&n=${limit}&w=${encodeURIComponent(query)}`;
-  const response = await fetch(endpoint, { headers: { Referer: 'https://y.qq.com/', 'User-Agent': 'Mozilla/5.0' } });
-  if (!response.ok) throw new Error(`QQ 音乐搜索返回 HTTP ${response.status}`);
-  const payload = await response.json();
-  return payload?.data?.song?.list ?? payload?.song?.list ?? [];
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await fetch(endpoint, { headers: { Referer: 'https://y.qq.com/', 'User-Agent': 'Mozilla/5.0' } });
+    if (!response.ok) throw new Error(`QQ 音乐搜索返回 HTTP ${response.status}`);
+    const payload = await response.json();
+    const songs = payload?.data?.song?.list ?? payload?.song?.list ?? [];
+    if (songs.length > 0 || attempt === 1) return songs;
+    await delay(450);
+  }
+  return [];
 }
 
 const QQ_CHARTS = [
@@ -167,20 +193,23 @@ function parseQQJsonp(text) {
   }
 }
 
-async function fetchQQChartPreview(chart) {
+async function fetchQQChartPreviews() {
   const endpoint = `https://c.y.qq.com/v8/fcg-bin/fcg_myqq_toplist.fcg?uin=0&needNewCode=1&platform=h5&g_tk=5381`;
   const response = await fetch(endpoint, { headers: { Referer: 'https://y.qq.com/', 'User-Agent': 'Mozilla/5.0' } });
   if (!response.ok) throw new Error(`QQ 榜单返回 HTTP ${response.status}`);
   const payload = parseQQJsonp(await response.text());
-  const item = (payload?.data?.topList ?? []).find((entry) => Number(entry.id) === chart.id);
-  return (item?.songList ?? []).map((song) => ({ ...song, chart }));
+  const toplists = payload?.data?.topList ?? [];
+  return QQ_CHARTS.flatMap((chart) => {
+    const item = toplists.find((entry) => Number(entry.id) === chart.id);
+    return (item?.songList ?? []).slice(0, 2).map((song) => ({ ...song, chart, chartCover: item?.picUrl ?? null }));
+  });
 }
 
 async function searchChartSong(song) {
   const query = `${song.songname ?? ''} ${song.singername ?? ''}`.trim();
   if (!query) return [];
   const songs = await searchQQSongs(query, 5);
-  return songs.filter(isPreferredSearchSong).map((candidate) => normalizeSearchSong(candidate, {
+  const metadata = {
     genre: song.chart.genre,
     mood: song.chart.mood,
     energy: song.chart.energy,
@@ -188,14 +217,25 @@ async function searchChartSong(song) {
     discoverySource: 'qq-chart',
     sourceGroup: 'chart',
     tag: `QQ ${song.chart.tag}`,
-  }));
+  };
+  const normalized = songs.filter(isPreferredSearchSong).map((candidate) => normalizeSearchSong(candidate, metadata));
+  if (normalized.length > 0 || !isPreferredSearchSong(song)) return normalized;
+  return [normalizeSearchSong(song, {
+    ...metadata,
+    id: `chart-${song.chart.id}-${song.songname}-${song.singername}`,
+    cover: song.chartCover,
+    url: `https://y.qq.com/n/ryqq/search?w=${encodeURIComponent(query)}`,
+  })];
 }
 
 async function discoverChartSongs() {
-  const previews = (await Promise.allSettled(QQ_CHARTS.map(fetchQQChartPreview)))
-    .filter((result) => result.status === 'fulfilled')
-    .flatMap((result) => result.value);
-  return (await Promise.allSettled(previews.map(searchChartSong)))
+  let previews = [];
+  try {
+    previews = await fetchQQChartPreviews();
+  } catch {
+    return [];
+  }
+  return (await mapSettledWithConcurrency(previews, 2, searchChartSong))
     .filter((result) => result.status === 'fulfilled')
     .flatMap((result) => result.value);
 }
@@ -203,22 +243,23 @@ async function discoverChartSongs() {
 ipcMain.handle('qqmusic:discover-tracks', async (_event, { seeds = [], excludedTracks = [], profile = null, pageStart = 1, limit = 240 } = {}) => {
   const excludedMids = new Set(excludedTracks.map((track) => String(track.qqMid ?? track.id ?? '')).filter(Boolean));
   const excludedKeys = new Set(excludedTracks.map((track) => searchSongKey(track.title, track.artist)));
-  const artists = [...new Set(seeds
+  const allArtists = [...new Set(seeds
     .flatMap((track) => String(track.artist ?? '').split(/\s*[/、,&]\s*/))
     .map((artist) => artist.trim())
-    .filter(Boolean))].slice(0, 24);
-  const searchPages = [0, 1, 2].map((offset) => ((Number(pageStart) - 1 + offset) % 6) + 1);
+    .filter(Boolean))];
+  const artistOffset = allArtists.length ? ((Math.max(1, Number(pageStart) || 1) - 1) * 12) % allArtists.length : 0;
+  const artists = [...allArtists.slice(artistOffset), ...allArtists.slice(0, artistOffset)].slice(0, 12);
+  const searchPages = [0, 1].map((offset) => ((Number(pageStart) - 1 + offset) % 8) + 1);
   const artistQueries = artists.flatMap((artist) => searchPages.map((page) => ({ artist, page })));
-  const artistResponses = await Promise.allSettled(artistQueries.map(({ artist, page }) => searchQQSongs(artist, 50, page)));
+  const artistResponses = await mapSettledWithConcurrency(artistQueries, 2, ({ artist, page }) => searchQQSongs(artist, 50, page));
   const artistSongs = artistResponses
-    .filter((response) => response.status === 'fulfilled')
-    .flatMap((response, index) => response.value.filter(isPreferredSearchSong).map((song) => normalizeSearchSong(song, {
+    .flatMap((response, index) => response.status === 'fulfilled' ? response.value.filter(isPreferredSearchSong).map((song) => normalizeSearchSong(song, {
       discoverySource: 'artist-neighbor',
       sourceGroup: 'playlist-artist',
       tag: '相近歌手探索',
       popularity: 78,
       searchPage: artistQueries[index]?.page ?? 1,
-    })));
+    })) : []);
   const chartSongs = await discoverChartSongs();
   const sourceSongs = [];
   const sourceLength = Math.max(artistSongs.length, chartSongs.length);
@@ -234,7 +275,7 @@ ipcMain.handle('qqmusic:discover-tracks', async (_event, { seeds = [], excludedT
     if (!track.id || !track.title || !isPreferredSearchSong(track) || seen.has(track.id) || excludedMids.has(String(track.id)) || excludedKeys.has(key)) continue;
     seen.add(track.id);
     discovered.push(track);
-    if (discovered.length >= Math.max(1, Math.min(800, Number(limit) || 240))) break;
+    if (discovered.length >= Math.max(1, Math.min(1200, Number(limit) || 500))) break;
   }
   return discovered;
 });

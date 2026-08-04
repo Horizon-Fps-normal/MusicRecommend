@@ -40,6 +40,7 @@ QQ 音乐公开搜索和歌单接口只用于元数据，不负责控制本地 Q
 - An imported playlist is treated as a taste profile, not as the recommendation pool. Discovery combines neighboring songs from playlist artists with multiple QQ public chart categories, so new artists can be recommended.
 - Each generation keeps a familiar lane from playlist artists while reserving most slots for new artists and chart discovery; multi-page artist searches and rotating result pages keep the long-term pool larger.
 - Candidate quality filtering removes common live, DJ, remix, sped-up, slowed, preview, snippet, ringtone, accompaniment, and very short versions before ranking.
+- QQ discovery requests are rate-limited in small batches, retry silent empty responses, exclude the 90-day history before truncating the pool, and retain a local discovery cache for temporary API outages.
 - Ranking uses normalized genre family, mood family, estimated energy/rhythm level, popularity, chart source, artist novelty, feedback, and recent-history exclusion. QQ's public song search does not expose reliable acoustic features, so rhythm and mood are metadata-based estimates rather than audio analysis.
 - Existing playlist tracks are excluded by QQ songmid and by normalized title/artist. Daily generation keeps at most one song per artist when enough distinct artists are available.
 - Daily generation applies 90-day history exclusion, dislike exclusion, popularity filtering when metadata exists, and one track per artist.
@@ -52,4 +53,4 @@ npm.cmd install
 npm.cmd run package:win
 ```
 
-The portable executable is written to `release-portable/Daily-Discovery-0.5.0-portable.exe`. An NSIS installer can be attempted with `npm.cmd run package:win:installer`; on some Windows machines, antivirus or controlled-folder protection may block the final installer file even though the unpacked application has been built successfully.
+The portable executable is written to `release-portable/Daily-Discovery-0.6.0-portable.exe`. An NSIS installer can be attempted with `npm.cmd run package:win:installer`; on some Windows machines, antivirus or controlled-folder protection may block the final installer file even though the unpacked application has been built successfully.
