@@ -118,6 +118,10 @@ function artistKey(value) {
   return labelText(value).split(/\s*[/、,&]\s*/)[0];
 }
 
+function isPlaylistArtistTrack(track, profile) {
+  return track.sourceGroup === 'playlist-artist' || Boolean(profile?.artists?.has?.(artistKey(track.artist)));
+}
+
 export function buildTasteProfile(tracks = []) {
   const normalized = tracks.map((track) => normalizeTrack(track, true)).filter((track) => track.title);
   const genreCounts = new Map();
@@ -177,14 +181,25 @@ export function buildRecommendations({ playlist, fallbackCandidates, amount, exc
   const pool = (eligible.length >= amount ? eligible : normalized).sort((a, b) => stableDailyScore(b, profile) - stableDailyScore(a, profile));
   const picked = [];
   const artists = new Set();
+  const targetPlaylistArtists = amount >= 4 ? Math.max(1, Math.round(amount * 0.35)) : 1;
 
-  // First pass enforces the user's daily one-song-per-artist rule.
-  for (const track of pool) {
+  // Keep a meaningful familiar lane while reserving the rest for discovery.
+  for (const track of pool.filter((candidate) => isPlaylistArtistTrack(candidate, profile))) {
+    if (artists.has(track.artist)) continue;
+    picked.push(track);
+    artists.add(track.artist);
+    if (picked.length >= targetPlaylistArtists) break;
+  }
+
+  // Fill the remaining slots from new artists, charts, and other sources.
+  for (const track of pool.filter((candidate) => !isPlaylistArtistTrack(candidate, profile))) {
     if (artists.has(track.artist)) continue;
     picked.push(track);
     artists.add(track.artist);
     if (picked.length >= amount) return picked;
   }
+
+  if (picked.length >= amount) return picked;
 
   // If the source has too few distinct artists, relax only this constraint so
   // the requested quantity can still be reached without repeating a song.

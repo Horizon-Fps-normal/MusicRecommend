@@ -307,14 +307,15 @@ function App() {
 
   async function discoverExternalCandidates(amount) {
     if (!usingRealPlaylist || !window.qqMusic?.discoverTracks) return [];
-    const seeds = activePlaylist.tracks.filter((track) => track.artist && track.title).slice(0, 12);
+    const seeds = activePlaylist.tracks.filter((track) => track.artist && track.title).slice(0, 120);
     if (seeds.length === 0) return [];
     try {
       return await window.qqMusic.discoverTracks({
         seeds,
         excludedTracks: activePlaylist.tracks,
         profile: tasteProfile,
-        limit: Math.max(60, amount * 8),
+        pageStart: (Math.floor(Date.now() / 86400000) + recentExcluded.size) % 6 + 1,
+        limit: Math.max(240, amount * 30),
       });
     } catch {
       return [];
