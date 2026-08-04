@@ -11,6 +11,7 @@ import {
   Heart,
   History as HistoryIcon,
   ImagePlus,
+  KeyRound,
   LibraryBig,
   Link2,
   Music2,
@@ -20,7 +21,6 @@ import {
   RefreshCw,
   Search,
   Settings2,
-  SkipForward,
   SlidersHorizontal,
   Sparkles,
   ThumbsUp,
@@ -28,9 +28,10 @@ import {
   X,
 } from 'lucide-react';
 import { CANDIDATES, NAV_ITEMS } from './data';
-import { buildRecommendations, buildTasteProfile, hasRealPlaylistTracks, isPreferredTrackVersion } from './recommendation';
+import { baseTitleKey, buildRecommendations, buildTasteProfile, hasRealPlaylistTracks, isPreferredTrackVersion } from './recommendation';
 import { daysSince, loadState, saveState } from './storage';
 import packageInfo from '../package.json';
+import appIcon from '../assets/daily-discovery-icon-512.png';
 
 const ICONS = { sparkles: Sparkles, library: LibraryBig, history: HistoryIcon, heart: Heart };
 
@@ -51,13 +52,38 @@ function isErrorNotice(message) {
   return /error|失败|无法|不可用|错误|没有找到|请检查/i.test(String(message ?? ''));
 }
 
+function feedbackValue(entry) {
+  return typeof entry === 'string' ? entry : entry?.value;
+}
+
+function feedbackDate(entry) {
+  return typeof entry === 'object' && entry?.at ? entry.at : null;
+}
+
 function mergeDiscoveryCandidates(...collections) {
   const merged = new Map();
-  collections.flat().filter(isPreferredTrackVersion).forEach((track) => {
-    const key = String(track.id ?? track.qqMid ?? `${track.title ?? ''}::${track.artist ?? ''}`).toLowerCase();
-    if (key && !merged.has(key)) merged.set(key, track);
+  collections.flat().filter((track) => isPreferredTrackVersion(track) && Number(track.qualitySignals) >= 2).forEach((track) => {
+    const key = baseTitleKey(track.title) || String(track.id ?? track.qqMid ?? '').toLowerCase();
+    const current = merged.get(key);
+    const score = Number(track.similarity) * 100 + Number(track.qualitySignals) * 10 + Math.log10(Number(track.commentCount) + 1);
+    const currentScore = current ? Number(current.similarity) * 100 + Number(current.qualitySignals) * 10 + Math.log10(Number(current.commentCount) + 1) : -1;
+    if (key && (!current || score > currentScore)) merged.set(key, track);
   });
-  return [...merged.values()].slice(0, 1200);
+  return [...merged.values()].slice(0, 1000);
+}
+
+function calibrationSample(tracks = [], size = 30) {
+  if (tracks.length <= size) return tracks;
+  const sampled = [];
+  const used = new Set();
+  for (let index = 0; index < size; index += 1) {
+    const track = tracks[Math.floor(index * tracks.length / size)];
+    if (track && !used.has(track.id)) {
+      used.add(track.id);
+      sampled.push(track);
+    }
+  }
+  return sampled;
 }
 
 function Cover({ track, small = false, onClick }) {
@@ -77,6 +103,21 @@ function StatusPill({ children, tone = 'neutral' }) {
   return <span className={`status-pill status-${tone}`}><span className="status-dot" />{children}</span>;
 }
 
+function PreferenceSelect({ label, value, onChange, options }) {
+  return (
+    <label className="preference-select">
+      <span>{label}</span>
+      <select value={value} onChange={(event) => onChange(event.target.value)}>
+        {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+      </select>
+    </label>
+  );
+}
+
+function ServiceStatus({ configured, children }) {
+  return <StatusPill tone={configured ? 'green' : 'amber'}>{children} · {configured ? '已配置' : '未配置'}</StatusPill>;
+}
+
 function EmptyState({ onGenerate }) {
   return (
     <div className="empty-state">
@@ -89,21 +130,20 @@ function EmptyState({ onGenerate }) {
 }
 
 function RecommendationCard({ track, feedback, onAction, onReplace, onPlay }) {
-  const selected = feedback?.[track.id];
+  const selected = feedbackValue(feedback?.[track.id]);
   const canPlayInApp = Boolean(track.playbackUrl);
   return (
     <article className={`track-card ${selected ? 'has-feedback' : ''}`}>
-      <div className="card-topline"><span className="match-label">{track.tag}</span><span className="match-score">{Math.round(72 + track.popularity / 10)}% 匹配</span></div>
+      <div className="card-topline"><span className="match-label">{track.tag}</span><span className="match-score">{Math.round(Math.max(0, Math.min(1, Number(track.similarity) || 0.5)) * 100)}% 画像相似</span></div>
       <Cover track={track} onClick={() => onPlay(track)} />
       <div className="track-info">
         <div className="track-heading"><div><h3>{track.title}</h3><p>{track.artist}</p></div><button className="icon-button" title="打开 QQ 音乐网页" onClick={() => window.open(track.url || `https://y.qq.com/n/ryqq/search?w=${encodeURIComponent(`${track.title} ${track.artist}`)}`, '_blank')}><ExternalLink size={16} /></button></div>
-        <div className="track-meta"><span>{track.album}</span><span>{track.genre}</span></div>
+        <div className="track-meta"><span>{track.album}</span><span>{track.genre}</span>{track.commentCountVerified ? <span>{track.commentCount.toLocaleString('zh-CN')} 条评论</span> : null}</div>
         <div className="card-actions">
           <button className="play-button" onClick={() => onPlay(track)}>{canPlayInApp ? <Play size={13} fill="currentColor" /> : <ExternalLink size={13} />}{canPlayInApp ? '播放' : '打开 QQ 音乐'}</button>
           <button className={`action-button ${selected === 'like' ? 'active-like' : ''}`} title="喜欢" onClick={() => onAction(track.id, 'like')}><ThumbsUp size={15} /></button>
           <button className={`action-button ${selected === 'favorite' ? 'active-save' : ''}`} title="收藏" onClick={() => onAction(track.id, 'favorite')}><Bookmark size={15} /></button>
           <button className={`action-button ${selected === 'heard' ? 'active-heard' : ''}`} title="已听过" onClick={() => onAction(track.id, 'heard')}><Check size={15} /></button>
-          <button className={`action-button ${selected === 'skip' ? 'active-skip' : ''}`} title="跳过" onClick={() => onAction(track.id, 'skip')}><SkipForward size={15} /></button>
           <button className={`action-button ${selected === 'dislike' ? 'active-dislike' : ''}`} title="不感兴趣" onClick={() => onAction(track.id, 'dislike')}><Ban size={15} /></button>
           <button className="replace-button" onClick={() => onReplace(track.id)}><RefreshCw size={14} />换一首</button>
         </div>
@@ -150,14 +190,18 @@ function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackTime, setPlaybackTime] = useState(0);
   const [playbackDuration, setPlaybackDuration] = useState(0);
+  const [credentialDraft, setCredentialDraft] = useState({ lastFmApiKey: '', geminiApiKey: '', openAiApiKey: '' });
+  const [credentialStatus, setCredentialStatus] = useState({ lastFmConfigured: false, geminiConfigured: false, openAiConfigured: false, encryptionAvailable: true });
+  const [isSavingCredentials, setIsSavingCredentials] = useState(false);
   const audioRef = useRef(null);
+  const prefetchSourceRef = useRef('');
 
   const activePlaylist = state.playlists.find((playlist) => playlist.id === sourceId) ?? state.playlists[0];
   const usingRealPlaylist = hasRealPlaylistTracks(activePlaylist);
-  const tasteProfile = useMemo(() => buildTasteProfile(activePlaylist?.tracks ?? []), [activePlaylist]);
+  const tasteProfile = useMemo(() => buildTasteProfile(activePlaylist?.tracks ?? [], state.calibration ?? {}, state.settings ?? {}), [activePlaylist, state.calibration, state.settings]);
   const detailPlaylist = state.playlists.find((playlist) => playlist.id === selectedPlaylistId);
   const detailTracks = (detailPlaylist?.tracks ?? []).filter((track) => `${track.title} ${track.artist} ${track.album}`.toLowerCase().includes(playlistSearch.trim().toLowerCase()));
-  const feedbackValues = Object.values(state.feedback);
+  const feedbackValues = Object.values(state.feedback).map(feedbackValue);
   const feedbackCount = feedbackValues.length;
   const likedCount = feedbackValues.filter((value) => value === 'like' || value === 'favorite').length;
   const feedbackTracks = useMemo(() => {
@@ -166,6 +210,12 @@ function App() {
       .forEach((track) => tracks.set(track.id, track));
     return tracks;
   }, [state.playlists, state.history]);
+  const calibrationTracks = useMemo(() => calibrationSample(activePlaylist?.tracks ?? []), [activePlaylist]);
+  const calibrationCompleted = calibrationTracks.length > 0 && calibrationTracks.every((track) => state.calibration?.[track.id]);
+
+  useEffect(() => {
+    window.qqMusic?.credentialStatus?.().then(setCredentialStatus).catch(() => {});
+  }, []);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -181,17 +231,72 @@ function App() {
     return () => audio.pause();
   }, [player?.src]);
 
-  const recentHistoryTracks = useMemo(() => state.history
-    .filter((entry) => daysSince(entry.createdAt) < 90)
-    .flatMap((entry) => entry.tracks ?? []), [state.history]);
+  const recentExcluded = useMemo(() => {
+    const excluded = new Set();
+    Object.entries(state.exposures ?? {}).forEach(([id, date]) => {
+      if (daysSince(date) < 7) excluded.add(id);
+    });
+    Object.entries(state.feedback ?? {}).forEach(([id, entry]) => {
+      const value = feedbackValue(entry);
+      if (['like', 'favorite', 'dislike'].includes(value)) excluded.add(id);
+      if (value === 'heard' && (!feedbackDate(entry) || daysSince(feedbackDate(entry)) < 90)) excluded.add(id);
+    });
+    return excluded;
+  }, [state.exposures, state.feedback]);
 
-  const recentExcluded = useMemo(() => new Set(state.history
-    .filter((entry) => daysSince(entry.createdAt) < 90)
-    .flatMap((entry) => entry.trackIds ?? entry.tracks?.map((track) => track.id) ?? [])), [state.history]);
+  const recentHistoryTracks = useMemo(() => {
+    const tracks = new Map();
+    state.history.flatMap((entry) => entry.tracks ?? []).forEach((track) => {
+      if (recentExcluded.has(track.id)) tracks.set(track.id, track);
+    });
+    return [...tracks.values()];
+  }, [state.history, recentExcluded]);
+
+  useEffect(() => {
+    const prefetchKey = `${sourceId}:${credentialStatus.lastFmConfigured}:${calibrationCompleted}`;
+    if (!usingRealPlaylist || !credentialStatus.lastFmConfigured || prefetchSourceRef.current === prefetchKey || (state.discoveryCache?.length ?? 0) >= 300) return undefined;
+    prefetchSourceRef.current = prefetchKey;
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      const first = await discoverExternalCandidates(10, 0);
+      if (cancelled || first.length === 0) return;
+      setState((current) => {
+        const next = { ...current, discoveryCache: mergeDiscoveryCandidates(first, current.discoveryCache ?? []) };
+        saveState(next);
+        return next;
+      });
+    }, 1200);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [sourceId, usingRealPlaylist, credentialStatus.lastFmConfigured, calibrationCompleted]);
 
   function commit(next) {
     setState(next);
     saveState(next);
+  }
+
+  function updateSetting(key, value) {
+    commit({ ...state, settings: { ...(state.settings ?? {}), [key]: value } });
+  }
+
+  function updateCalibration(trackId, value) {
+    commit({ ...state, calibration: { ...(state.calibration ?? {}), [trackId]: value } });
+  }
+
+  async function saveCredentials() {
+    if (!window.qqMusic?.saveCredentials || isSavingCredentials) return;
+    setIsSavingCredentials(true);
+    try {
+      const status = await window.qqMusic.saveCredentials(credentialDraft);
+      setCredentialStatus(status);
+      setCredentialDraft({ lastFmApiKey: '', geminiApiKey: '', openAiApiKey: '' });
+      prefetchSourceRef.current = '';
+      setNotice('API 凭据已使用 Windows 系统加密保存在本机');
+    } catch (error) {
+      setNotice(cleanErrorMessage(error, 'API 凭据保存失败'));
+    } finally {
+      setIsSavingCredentials(false);
+    }
+    setTimeout(() => setNotice(''), 3000);
   }
 
   function togglePlayback() {
@@ -301,16 +406,15 @@ function App() {
   }
 
   function buildDailyRecommendations(amount, excluded = new Set(), externalCandidates = []) {
-    const rejected = new Set(Object.entries(state.feedback).filter(([, value]) => value === 'dislike').map(([id]) => id));
-    const hasExternalCandidates = externalCandidates.length > 0;
+    const rejected = new Set(Object.entries(state.feedback).filter(([, entry]) => feedbackValue(entry) === 'dislike').map(([id]) => id));
     return buildRecommendations({
-      playlist: hasExternalCandidates ? { tracks: [] } : (usingRealPlaylist ? { tracks: [] } : activePlaylist),
-      fallbackCandidates: hasExternalCandidates ? [...externalCandidates, ...CANDIDATES] : CANDIDATES,
+      playlist: usingRealPlaylist ? { tracks: [] } : activePlaylist,
+      fallbackCandidates: usingRealPlaylist ? externalCandidates : CANDIDATES,
       amount,
       excluded,
       rejected,
       blockedTracks: usingRealPlaylist ? activePlaylist.tracks : [],
-      sourceType: hasExternalCandidates ? 'discovery' : 'demo',
+      sourceType: usingRealPlaylist ? 'discovery' : 'demo',
       profile: tasteProfile,
     });
   }
@@ -319,13 +423,35 @@ function App() {
     if (!usingRealPlaylist || !window.qqMusic?.discoverTracks) return [];
     const seeds = activePlaylist.tracks.filter((track) => track.artist && track.title);
     if (seeds.length === 0) return [];
+    const seedPageCount = Math.max(1, Math.ceil(seeds.length / 8));
+    const seedPage = (Math.floor(Date.now() / 86400000) + recentExcluded.size) % seedPageCount;
+    const likedSeeds = seeds.filter((track) => state.calibration?.[track.id] === 'like');
+    const dislikedSeeds = seeds.filter((track) => state.calibration?.[track.id] === 'dislike');
+    Object.entries(state.feedback ?? {}).forEach(([id, entry]) => {
+      const track = feedbackTracks.get(id);
+      if (!track) return;
+      if (['like', 'favorite'].includes(feedbackValue(entry))) likedSeeds.push(track);
+      if (feedbackValue(entry) === 'dislike') dislikedSeeds.push(track);
+    });
     try {
       return await window.qqMusic.discoverTracks({
         seeds,
+        likedSeeds,
+        dislikedSeeds,
+        playlistTracks: activePlaylist.tracks,
         excludedTracks: [...activePlaylist.tracks, ...recentHistoryTracks],
-        profile: tasteProfile,
-        pageStart: (Math.floor(Date.now() / 86400000) + recentExcluded.size + pageOffset) % 8 + 1,
-        limit: Math.max(500, amount * 60),
+        pageStart: seedPage + pageOffset + 1,
+        limit: Math.min(1000, Math.max(80, amount * 20)),
+        requestedAmount: amount,
+        includeAi: pageOffset === 0,
+        settings: {
+          aiProvider: state.settings?.aiProvider ?? 'gemini',
+          geminiModel: state.settings?.geminiModel ?? 'gemini-2.5-flash',
+          openAiModel: state.settings?.openAiModel ?? 'gpt-5-mini',
+          openAiBaseUrl: state.settings?.openAiBaseUrl ?? 'https://api.openai.com/v1',
+        },
+        mood: state.settings?.mood ?? 'auto',
+        language: state.settings?.language ?? 'auto',
       });
     } catch {
       return [];
@@ -348,31 +474,41 @@ function App() {
   }
 
   async function generate() {
-    const requested = Math.max(1, Math.min(40, Number(count) || 1));
+    const requested = Math.max(1, Math.min(10, Number(count) || 1));
+    if (usingRealPlaylist && !credentialStatus.lastFmConfigured) {
+      setView('settings');
+      setNotice('请先在设置中填写 Last.fm API Key，再生成经过热度验证的推荐');
+      setTimeout(() => setNotice(''), 3600);
+      return;
+    }
     setIsGenerating(true);
     setNotice(usingRealPlaylist ? '正在综合曲风、节奏、氛围与热度寻找歌单外新歌…' : '正在匹配 QQ 音乐封面与播放信息…');
-    const fetchedCandidates = await discoverExternalCandidates(requested);
-    let externalCandidates = mergeDiscoveryCandidates(fetchedCandidates, state.discoveryCache ?? []);
+    let externalCandidates = mergeDiscoveryCandidates(state.discoveryCache ?? []);
     let selectedTracks = buildDailyRecommendations(requested, recentExcluded, externalCandidates);
-    if (usingRealPlaylist && selectedTracks.length < requested) {
-      const extraCandidates = await discoverExternalCandidates(requested, 2);
-      externalCandidates = mergeDiscoveryCandidates(extraCandidates, externalCandidates);
+    const pageOffsets = usingRealPlaylist ? [0] : [];
+    for (let index = 0; index < pageOffsets.length && selectedTracks.length < requested; index += 1) {
+      setNotice(`正在搜索第 ${index + 1} 批候选，并核验评论热度与版本质量…`);
+      const fetchedCandidates = await discoverExternalCandidates(requested, pageOffsets[index]);
+      externalCandidates = mergeDiscoveryCandidates(fetchedCandidates, externalCandidates);
       selectedTracks = buildDailyRecommendations(requested, recentExcluded, externalCandidates);
     }
     const tracks = await enrichTracks(selectedTracks);
-    const entry = { id: `history-${Date.now()}`, createdAt: new Date().toISOString(), source: activePlaylist?.name ?? '常听收藏', requested, trackIds: tracks.map((track) => track.id), tracks };
-    const next = { ...state, recommendations: tracks, history: [entry, ...state.history].slice(0, 50), discoveryCache: externalCandidates };
+    const createdAt = new Date().toISOString();
+    const entry = { id: `history-${Date.now()}`, createdAt, source: activePlaylist?.name ?? '常听收藏', requested, trackIds: tracks.map((track) => track.id), tracks };
+    const exposures = { ...(state.exposures ?? {}) };
+    tracks.forEach((track) => { exposures[track.id] = createdAt; });
+    const next = { ...state, recommendations: tracks, history: [entry, ...state.history].slice(0, 50), discoveryCache: externalCandidates, exposures };
     commit(next);
     setIsGenerating(false);
     const resultLabel = tracks.length < requested
-      ? `可用歌曲不足，已生成 ${tracks.length} 首（目标 ${requested} 首）`
+      ? `严格过滤后已生成 ${tracks.length} 首（目标 ${requested} 首）；未用冷门或改版歌曲凑数`
       : `${externalCandidates.length ? '已基于歌单画像探索不同歌手的新歌' : usingRealPlaylist ? '未找到足够歌单外歌曲，使用备用探索池' : '当前使用演示候选生成'} ${tracks.length} 首今日推荐`;
     setNotice(resultLabel);
     setTimeout(() => setNotice(''), 2600);
   }
 
   function action(trackId, value) {
-    const next = { ...state, feedback: { ...state.feedback, [trackId]: value } };
+    const next = { ...state, feedback: { ...state.feedback, [trackId]: { value, at: new Date().toISOString() } } };
     commit(next);
     setNotice(value === 'dislike' ? '已加入不感兴趣，后续会降低相似推荐' : '反馈已保存，会影响后续推荐');
     setTimeout(() => setNotice(''), 2400);
@@ -505,7 +641,7 @@ function App() {
   return (
     <div className="app-shell" style={state.settings?.background ? { backgroundImage: `linear-gradient(rgba(14,20,32,.87), rgba(14,20,32,.96)), url("${state.settings.background}")`, backgroundSize: 'cover', backgroundAttachment: 'fixed' } : undefined}>
       <aside className="sidebar">
-        <div className="brand"><div className="brand-mark"><Sparkles size={18} /></div><div><span className="brand-name">DAILY</span><span className="brand-sub">DISCOVERY</span></div></div>
+        <div className="brand"><div className="brand-mark"><img src={appIcon} alt="" /></div><div><span className="brand-name">DAILY</span><span className="brand-sub">DISCOVERY</span></div></div>
         <div className="profile-chip"><div className="avatar">H</div><div><strong>本地音乐空间</strong><span>只存储在这台电脑</span></div><ChevronDown size={15} /></div>
         <div className="nav-label">工作台</div>
         <nav className="main-nav">
@@ -518,11 +654,13 @@ function App() {
         <header className="topbar"><div className="breadcrumbs"><span>音乐空间</span><span className="crumb-separator">/</span><strong>{view === 'playlist-detail' ? detailPlaylist?.name ?? '歌单详情' : NAV_ITEMS.find((item) => item.id === view)?.label ?? '今日发现'}</strong></div><div className="topbar-actions"><div className="connection-state"><span className="green-orb" />{state.synced ? 'QQ 音乐歌单已同步' : '演示歌单已加载 · 适配器待接入'}</div><button className="icon-button quiet" onClick={() => setNotice('所有数据都保存在本地浏览器存储中')}><CircleHelp size={17} /></button></div></header>
 
         {view === 'discover' && <>
-          <section className="hero-row"><div><div className="eyebrow"><span className="eyebrow-line" />{todayLabel()}</div><h1>今天，想听点<br /><span>不一样的。</span></h1><p className="hero-copy">从你的常听收藏出发，留一点熟悉，也留一点意外。</p></div><div className="hero-note"><div className="note-icon"><Sparkles size={18} /></div><div><span>推荐策略</span><strong>熟悉 50% · 探索 50%</strong><small>曲风与情绪优先，过滤过冷歌曲</small></div></div></section>
+          <section className="hero-row"><div><div className="eyebrow"><span className="eyebrow-line" />{todayLabel()}</div><h1>今天，想听点<br /><span>不一样的。</span></h1><p className="hero-copy">从整张歌单画像出发，优先好听可靠，也保留恰到好处的新鲜感。</p></div><div className="hero-note"><div className="note-icon"><Sparkles size={18} /></div><div><span>推荐策略</span><strong>保险热门 70% · 个性探索 30%</strong><small>QQ 评论、Last.fm 热度与榜单记录联合验证</small></div></div></section>
 
-          <section className="control-panel"><div className="control-heading"><div><span className="section-kicker">今日生成器</span><h2>告诉我今天想发现几首</h2></div><div className="source-select-wrap"><span>基于</span><button className="source-select" onClick={() => setShowSourceMenu(!showSourceMenu)}><div className="source-avatar" style={{ background: activePlaylist?.accent ?? '#f2b84b' }}><Music2 size={14} /></div><strong>{activePlaylist?.name ?? '未选择歌单'}</strong><ChevronDown size={15} /></button>{showSourceMenu && <div className="source-menu">{state.playlists.map((playlist) => <button key={playlist.id} onClick={() => { setSourceId(playlist.id); setShowSourceMenu(false); }}><span className="source-avatar" style={{ background: playlist.accent }}><Music2 size={13} /></span><span>{playlist.name}</span>{playlist.id === sourceId ? <Check size={15} /> : null}</button>)}</div>}</div></div><div className="generator-row"><div className="quantity-input"><button onClick={() => setCount(Math.max(1, count - 1))}>−</button><input value={count} onChange={(event) => setCount(event.target.value.replace(/\D/g, '').slice(0, 2))} aria-label="推荐数量" /><span>首</span><button onClick={() => setCount(Math.min(40, Number(count || 1) + 1))}>+</button></div><div className="quick-counts"><span>快速选择</span>{[5, 10, 20, 30].map((value) => <button key={value} className={Number(count) === value ? 'selected-count' : ''} onClick={() => setCount(value)}>{value}</button>)}</div><button className="primary-button generate-button" onClick={generate} disabled={isGenerating}>{isGenerating ? <RefreshCw size={17} className="spin-icon" /> : <Sparkles size={17} />}{isGenerating ? '匹配中…' : '生成推荐'} {!isGenerating && <ArrowUpRight size={17} />}</button></div></section>
+          {usingRealPlaylist && (!credentialStatus.lastFmConfigured || !calibrationCompleted) ? <section className="setup-banner"><div className="setup-banner-icon"><KeyRound size={19} /></div><div><strong>{!credentialStatus.lastFmConfigured ? '还差一步才能启用高质量推荐' : '完成 30 首口味校准，推荐会更准'}</strong><span>{!credentialStatus.lastFmConfigured ? 'Last.fm 用于相似歌曲和听众热度验证；密钥只会加密保存在本机。' : `已完成 ${calibrationTracks.filter((track) => state.calibration?.[track.id]).length} / ${calibrationTracks.length} 首。`}</span></div><button className="secondary-button" onClick={() => setView('settings')}>前往设置 <ArrowUpRight size={14} /></button></section> : null}
 
-          <section className="metrics-row"><button className="metric-card metric-link" onClick={() => { setView('playlists'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}><div className="metric-icon gold"><LibraryBig size={17} /></div><div><span>已连接歌单</span><strong>{state.playlists.length} <small>个</small></strong></div><span className="metric-tail">查看歌单 <ArrowUpRight size={13} /></span></button><button className="metric-card metric-link" onClick={() => { setView('history'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}><div className="metric-icon purple"><SlidersHorizontal size={17} /></div><div><span>90 天去重</span><strong>{recentExcluded.size} <small>首</small></strong></div><span className="metric-tail">查看历史 <ArrowUpRight size={13} /></span></button><button className="metric-card metric-link" onClick={() => { setView('feedback'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}><div className="metric-icon coral"><Heart size={17} /></div><div><span>累计反馈</span><strong>{feedbackCount} <small>次</small></strong></div><span className="metric-tail">查看反馈 <ArrowUpRight size={13} /></span></button></section>
+          <section className="control-panel"><div className="control-heading"><div><span className="section-kicker">今日生成器</span><h2>告诉我今天想发现几首</h2></div><div className="source-select-wrap"><span>基于</span><button className="source-select" onClick={() => setShowSourceMenu(!showSourceMenu)}><div className="source-avatar" style={{ background: activePlaylist?.accent ?? '#f2b84b' }}><Music2 size={14} /></div><strong>{activePlaylist?.name ?? '未选择歌单'}</strong><ChevronDown size={15} /></button>{showSourceMenu && <div className="source-menu">{state.playlists.map((playlist) => <button key={playlist.id} onClick={() => { setSourceId(playlist.id); setShowSourceMenu(false); }}><span className="source-avatar" style={{ background: playlist.accent }}><Music2 size={13} /></span><span>{playlist.name}</span>{playlist.id === sourceId ? <Check size={15} /> : null}</button>)}</div>}</div></div><div className="preference-row"><PreferenceSelect label="心情" value={state.settings?.mood ?? 'auto'} onChange={(value) => updateSetting('mood', value)} options={[{ value: 'auto', label: '自动判断' }, { value: 'happy', label: '轻快开心' }, { value: 'calm', label: '安静放松' }, { value: 'sad', label: '伤感沉浸' }, { value: 'energetic', label: '高能提神' }]} /><PreferenceSelect label="语言" value={state.settings?.language ?? 'auto'} onChange={(value) => updateSetting('language', value)} options={[{ value: 'auto', label: '自动混合' }, { value: 'zh', label: '华语' }, { value: 'en', label: '英语' }, { value: 'ja-ko', label: '日语 / 韩语' }, { value: 'mixed', label: '不限语言' }]} /></div><div className="generator-row"><div className="quantity-input"><button onClick={() => setCount(Math.max(1, Number(count || 1) - 1))}>−</button><input value={count} onChange={(event) => setCount(Math.min(10, Number(event.target.value.replace(/\D/g, '').slice(0, 2)) || 1))} aria-label="推荐数量" /><span>首</span><button onClick={() => setCount(Math.min(10, Number(count || 1) + 1))}>+</button></div><div className="quick-counts"><span>快速选择</span>{[5, 10].map((value) => <button key={value} className={Number(count) === value ? 'selected-count' : ''} onClick={() => setCount(value)}>{value}</button>)}</div><button className="primary-button generate-button" onClick={generate} disabled={isGenerating}>{isGenerating ? <RefreshCw size={17} className="spin-icon" /> : <Sparkles size={17} />}{isGenerating ? '匹配中…' : '生成推荐'} {!isGenerating && <ArrowUpRight size={17} />}</button></div></section>
+
+          <section className="metrics-row"><button className="metric-card metric-link" onClick={() => { setView('playlists'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}><div className="metric-icon gold"><LibraryBig size={17} /></div><div><span>已连接歌单</span><strong>{state.playlists.length} <small>个</small></strong></div><span className="metric-tail">查看歌单 <ArrowUpRight size={13} /></span></button><button className="metric-card metric-link" onClick={() => { setView('history'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}><div className="metric-icon purple"><SlidersHorizontal size={17} /></div><div><span>7 天曝光去重</span><strong>{recentExcluded.size} <small>首</small></strong></div><span className="metric-tail">查看历史 <ArrowUpRight size={13} /></span></button><button className="metric-card metric-link" onClick={() => { setView('feedback'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}><div className="metric-icon coral"><Heart size={17} /></div><div><span>累计反馈</span><strong>{feedbackCount} <small>次</small></strong></div><span className="metric-tail">查看反馈 <ArrowUpRight size={13} /></span></button></section>
 
           <section className="recommendation-section"><div className="section-header"><div><div className="section-kicker">为你挑选</div><h2>今日推荐 <span>{state.recommendations.length ? `· ${state.recommendations.length} 首` : ''}</span></h2></div>{state.recommendations.length ? <div className="result-tools"><StatusPill tone="green">已过滤重复与冷门</StatusPill><button className="text-button" onClick={generate}><RefreshCw size={15} />全部重抽</button></div> : null}</div>{state.recommendations.length === 0 ? <EmptyState onGenerate={generate} /> : <div className="track-grid">{state.recommendations.map((track) => <RecommendationCard key={track.id} track={track} feedback={state.feedback} onAction={action} onReplace={replace} onPlay={playTrack} />)}</div>}</section>
         </>}
@@ -533,9 +671,40 @@ function App() {
 
         {view === 'history' && <section className="page-section"><div className="page-heading"><div><div className="section-kicker">时间线</div><h1>推荐历史</h1><p>每一次生成，都是你音乐口味的一次快照。</p></div><button className="text-button danger-text" onClick={resetWorkspace}><X size={15} />清空历史与反馈</button></div>{state.history.length === 0 ? <div className="empty-state compact"><div className="empty-orbit"><HistoryIcon size={30} /></div><h3>还没有推荐历史</h3><p>生成第一份今日推荐后，它会出现在这里。</p></div> : <div className="history-list">{state.history.map((entry) => <div className="history-row" key={entry.id}><div className="history-date"><strong>{new Date(entry.createdAt).getDate()}</strong><span>{new Intl.DateTimeFormat('zh-CN', { month: 'short' }).format(new Date(entry.createdAt))}</span></div><div className="history-main"><div><strong>{entry.source}</strong><span>{entry.requested} 首请求 · 生成 {entry.tracks.length} 首</span></div><div className="history-covers">{entry.tracks.slice(0, 5).map((track) => <Cover key={track.id} track={track} small />)}{entry.tracks.length > 5 ? <span className="more-cover">+{entry.tracks.length - 5}</span> : null}</div></div><span className="history-time">{timeLabel(entry.createdAt)}</span></div>)}</div>}</section>}
 
-        {view === 'feedback' && <section className="page-section"><div className="page-heading"><div><div className="section-kicker">长期偏好</div><h1>反馈中心</h1><p>你的每一次选择，都会影响以后所有推荐。</p></div><StatusPill tone="purple">持续学习中</StatusPill></div><div className="feedback-summary"><div><strong>{feedbackCount}</strong><span>条反馈</span></div><div><strong>{likedCount}</strong><span>次喜欢 / 收藏</span></div><div><strong>{Object.values(state.feedback).filter((value) => value === 'dislike').length}</strong><span>首已排除</span></div></div><div className="feedback-table"><div className="feedback-table-head"><span>歌曲</span><span>歌手</span><span>你的反馈</span><span>操作</span></div>{Object.entries(state.feedback).length === 0 ? <div className="table-empty">还没有反馈。去今日发现里告诉系统你的口味吧。</div> : Object.entries(state.feedback).map(([trackId, value]) => { const track = feedbackTracks.get(trackId); if (!track) return null; return <div className="feedback-row" key={trackId}><div className="feedback-track"><Cover track={track} small /><strong>{track.title}</strong></div><span>{track.artist}</span><StatusPill tone={value === 'dislike' ? 'coral' : 'green'}>{({ like: '喜欢', favorite: '收藏', heard: '已听过', skip: '跳过', dislike: '不感兴趣' })[value]}</StatusPill><button className="text-button" onClick={() => { const next = { ...state, feedback: Object.fromEntries(Object.entries(state.feedback).filter(([id]) => id !== trackId)) }; commit(next); }}>撤销反馈</button></div>; })}</div></section>}
+        {view === 'feedback' && <section className="page-section"><div className="page-heading"><div><div className="section-kicker">长期偏好</div><h1>反馈中心</h1><p>喜欢和收藏永久加强偏好，不感兴趣会永久排除，已听过歌曲 90 天内不再出现。</p></div><StatusPill tone="purple">持续学习中</StatusPill></div><div className="feedback-summary"><div><strong>{feedbackCount}</strong><span>条反馈</span></div><div><strong>{likedCount}</strong><span>次喜欢 / 收藏</span></div><div><strong>{feedbackValues.filter((value) => value === 'dislike').length}</strong><span>首已排除</span></div></div><div className="feedback-table"><div className="feedback-table-head"><span>歌曲</span><span>歌手</span><span>你的反馈</span><span>操作</span></div>{Object.entries(state.feedback).length === 0 ? <div className="table-empty">还没有反馈。去今日发现里告诉系统你的口味吧。</div> : Object.entries(state.feedback).map(([trackId, entry]) => { const track = feedbackTracks.get(trackId); const value = feedbackValue(entry); if (!track) return null; return <div className="feedback-row" key={trackId}><div className="feedback-track"><Cover track={track} small /><strong>{track.title}</strong></div><span>{track.artist}</span><StatusPill tone={value === 'dislike' ? 'coral' : 'green'}>{({ like: '喜欢', favorite: '收藏', heard: '已听过', dislike: '不感兴趣' })[value]}</StatusPill><button className="text-button" onClick={() => { const next = { ...state, feedback: Object.fromEntries(Object.entries(state.feedback).filter(([id]) => id !== trackId)) }; commit(next); }}>撤销反馈</button></div>; })}</div></section>}
 
-        {view === 'settings' && <section className="page-section"><div className="page-heading"><div><div className="section-kicker">个性化</div><h1>设置</h1><p>把音乐空间调整成你喜欢的样子。</p></div><StatusPill tone="green">全部本地保存</StatusPill></div><div className="settings-grid"><div className="settings-card"><div className="settings-card-icon"><ImagePlus size={20} /></div><div className="settings-card-copy"><h2>自定义背景</h2><p>上传本地图片作为应用背景。图片会压缩后保存在本机，不会上传到网络。</p><div className="settings-actions"><label className="primary-button upload-button"><ImagePlus size={16} />上传图片<input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleBackgroundUpload} /></label>{state.settings?.background ? <button className="text-button" onClick={removeBackground}><X size={15} />恢复默认</button> : null}</div></div></div><div className="background-preview" style={state.settings?.background ? { backgroundImage: `url("${state.settings.background}")` } : undefined}>{state.settings?.background ? <span>当前背景</span> : <><Music2 size={28} /><span>默认背景</span></>}</div></div><div className="settings-card privacy-card"><div className="settings-card-icon green-icon"><Check size={20} /></div><div className="settings-card-copy"><h2>本地优先</h2><p>推荐历史、反馈和背景图片均保存在这台电脑。QQ 音乐请求只在导入或播放时发起。</p></div></div></section>}
+        {view === 'settings' && <section className="page-section settings-page">
+          <div className="page-heading"><div><div className="section-kicker">推荐引擎</div><h1>设置</h1><p>配置候选来源、完成口味校准，并管理本地外观。</p></div><StatusPill tone={credentialStatus.encryptionAvailable ? 'green' : 'coral'}>{credentialStatus.encryptionAvailable ? 'Windows 加密存储' : '系统加密不可用'}</StatusPill></div>
+
+          <div className="service-card settings-card">
+            <div className="settings-card-icon"><KeyRound size={20} /></div>
+            <div className="settings-card-copy">
+              <div className="settings-title-row"><div><h2>推荐服务与 API 凭据</h2><p>Last.fm 负责相似歌曲和全球热度证据；AI 只提出候选，最终仍需通过 QQ 音乐精确匹配、版本过滤和多信号热度验证。</p></div><div className="service-statuses"><ServiceStatus configured={credentialStatus.lastFmConfigured}>Last.fm</ServiceStatus><ServiceStatus configured={credentialStatus.geminiConfigured}>Gemini</ServiceStatus><ServiceStatus configured={credentialStatus.openAiConfigured}>OpenAI</ServiceStatus></div></div>
+              <div className="service-form-grid">
+                <label className="wide-field"><span>OpenAI Compatible API Base URL</span><input value={state.settings?.openAiBaseUrl ?? 'https://api.openai.com/v1'} onChange={(event) => updateSetting('openAiBaseUrl', event.target.value)} placeholder="https://api.openai.com/v1" /><small>Groq: https://api.groq.com/openai/v1. This is an endpoint, not an API key.</small></label>
+                <label><span>AI 候选来源</span><select value={state.settings?.aiProvider ?? 'gemini'} onChange={(event) => updateSetting('aiProvider', event.target.value)}><option value="gemini">Gemini</option><option value="openai">OpenAI</option><option value="off">仅使用 Last.fm</option></select></label>
+                <label><span>Last.fm API Key（必填）</span><input type="password" value={credentialDraft.lastFmApiKey} onChange={(event) => setCredentialDraft({ ...credentialDraft, lastFmApiKey: event.target.value })} placeholder={credentialStatus.lastFmConfigured ? '已配置；留空则保持不变' : '粘贴 Last.fm API Key'} /></label>
+                <label><span>Gemini API Key</span><input type="password" value={credentialDraft.geminiApiKey} onChange={(event) => setCredentialDraft({ ...credentialDraft, geminiApiKey: event.target.value })} placeholder={credentialStatus.geminiConfigured ? '已配置；留空则保持不变' : '选择 Gemini 时填写'} /></label>
+                <label><span>OpenAI API Key</span><input type="password" value={credentialDraft.openAiApiKey} onChange={(event) => setCredentialDraft({ ...credentialDraft, openAiApiKey: event.target.value })} placeholder={credentialStatus.openAiConfigured ? '已配置；留空则保持不变' : '选择 OpenAI 时填写'} /></label>
+                <label><span>Gemini 模型</span><input value={state.settings?.geminiModel ?? 'gemini-2.5-flash'} onChange={(event) => updateSetting('geminiModel', event.target.value)} /></label>
+                <label><span>OpenAI 模型</span><input value={state.settings?.openAiModel ?? 'gpt-5-mini'} onChange={(event) => updateSetting('openAiModel', event.target.value)} /></label>
+              </div>
+              <div className="settings-actions"><button className="primary-button" onClick={saveCredentials} disabled={isSavingCredentials || !credentialStatus.encryptionAvailable}>{isSavingCredentials ? <RefreshCw size={16} className="spin-icon" /> : <KeyRound size={16} />}{isSavingCredentials ? '保存中…' : '加密保存凭据'}</button><small>密钥不会显示、写入 Git 仓库或进入推荐历史。</small></div>
+            </div>
+          </div>
+
+          <div className="calibration-card settings-card">
+            <div className="settings-card-icon"><SlidersHorizontal size={20} /></div>
+            <div className="settings-card-copy">
+              <div className="settings-title-row"><div><h2>30 首口味校准</h2><p>从当前歌单均匀抽样。喜欢会增强对应画像，不喜欢会降低歌手与风格权重，一般不会改变偏好。</p></div><StatusPill tone={calibrationCompleted ? 'green' : 'purple'}>{calibrationTracks.filter((track) => state.calibration?.[track.id]).length} / {calibrationTracks.length}</StatusPill></div>
+              {!usingRealPlaylist ? <div className="table-empty">请先导入并选择真实 QQ 音乐歌单。</div> : <div className="calibration-list">{calibrationTracks.map((track) => <div className="calibration-row" key={track.id}><div className="calibration-track"><Cover track={track} small /><div><strong>{track.title}</strong><span>{track.artist}</span></div></div><div className="calibration-actions"><button className={state.calibration?.[track.id] === 'like' ? 'selected' : ''} onClick={() => updateCalibration(track.id, 'like')}><ThumbsUp size={14} />喜欢</button><button className={state.calibration?.[track.id] === 'neutral' ? 'selected' : ''} onClick={() => updateCalibration(track.id, 'neutral')}>一般</button><button className={state.calibration?.[track.id] === 'dislike' ? 'selected dislike' : ''} onClick={() => updateCalibration(track.id, 'dislike')}><Ban size={14} />不喜欢</button></div></div>)}</div>}
+              {usingRealPlaylist ? <div className="settings-actions"><button className="text-button" onClick={() => commit({ ...state, calibration: {} })}><RefreshCw size={15} />重新校准</button><small>“一般”只计为已完成，不影响口味权重。</small></div> : null}
+            </div>
+          </div>
+
+          <div className="settings-grid appearance-grid"><div className="settings-card"><div className="settings-card-icon"><ImagePlus size={20} /></div><div className="settings-card-copy"><h2>自定义背景</h2><p>上传本地图片作为应用背景。图片会压缩后保存在本机，不会上传到网络。</p><div className="settings-actions"><label className="primary-button upload-button"><ImagePlus size={16} />上传图片<input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleBackgroundUpload} /></label>{state.settings?.background ? <button className="text-button" onClick={removeBackground}><X size={15} />恢复默认</button> : null}</div></div></div><div className="background-preview" style={state.settings?.background ? { backgroundImage: `url("${state.settings.background}")` } : undefined}>{state.settings?.background ? <span>当前背景</span> : <><Music2 size={28} /><span>默认背景</span></>}</div></div>
+          <div className="settings-card privacy-card"><div className="settings-card-icon green-icon"><Check size={20} /></div><div className="settings-card-copy"><h2>数据边界</h2><p>歌单、反馈、校准、推荐历史和背景保存在本机。生成推荐时，歌曲画像会发送给你主动配置的 Last.fm、Gemini 或 OpenAI 服务；API 密钥由 Windows 加密存储。</p></div></div>
+        </section>}
 
         <footer className="app-footer"><span><span className="green-orb" />本地模式 · 数据存储在此设备</span><span>Daily Discovery v{packageInfo.version}</span></footer>
       </main>

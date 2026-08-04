@@ -1,6 +1,6 @@
 {
   "name": "daily-discovery",
-  "version": "0.6.0",
+  "version": "0.8.0",
   "private": true,
   "author": "Daily Discovery contributors",
   "main": "electron/main.cjs",
@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5199 --strictPort",
     "build": "vite build",
+    "test": "node --test tests/*.test.cjs tests/*.test.mjs",
     "desktop": "npm run build && electron .",
     "package:win": "npm run build && electron-builder --win portable --config.electronDist=node_modules/electron/dist --config.directories.output=release-portable",
     "package:win:installer": "npm run build && electron-builder --win nsis --config.electronDist=node_modules/electron/dist --config.directories.output=release-installer",
@@ -34,10 +35,13 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "assets/daily-discovery-icon-512.png",
+      "assets/daily-discovery-icon.ico",
       "package.json"
     ],
     "asar": true,
     "win": {
+      "icon": "assets/daily-discovery-icon.ico",
       "target": [
         "nsis",
         "portable"

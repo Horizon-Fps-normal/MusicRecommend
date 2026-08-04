@@ -5,4 +5,6 @@ contextBridge.exposeInMainWorld('qqMusic', {
   playTrack: (payload) => ipcRenderer.invoke('qqmusic:play-track', payload),
   resolveTrack: (payload) => ipcRenderer.invoke('qqmusic:resolve-track', payload),
   discoverTracks: (payload) => ipcRenderer.invoke('qqmusic:discover-tracks', payload),
+  credentialStatus: () => ipcRenderer.invoke('credentials:status'),
+  saveCredentials: (payload) => ipcRenderer.invoke('credentials:save', payload),
 });

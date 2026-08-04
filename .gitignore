@@ -8,6 +8,9 @@ release*/
 !.env.example
 *.log
 *.local
+artifacts/
+assets/daily-discovery-icon-source.png
+assets/daily-discovery-icon.png
 
 # Local Electron profile and editor/system files
 Daily Discovery/
