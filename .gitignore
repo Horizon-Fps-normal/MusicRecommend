@@ -1,0 +1,15 @@
+node_modules/
+dist/
+release/
+release*/
+.vite/
+.env
+.env.*
+!.env.example
+*.log
+*.local
+
+# Local Electron profile and editor/system files
+Daily Discovery/
+.DS_Store
+Thumbs.db

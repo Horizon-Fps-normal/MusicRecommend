@@ -1,0 +1,59 @@
+{
+  "name": "daily-discovery",
+  "version": "0.1.0",
+  "private": true,
+  "author": "Daily Discovery contributors",
+  "main": "electron/main.cjs",
+  "description": "A local-first daily music discovery app for QQ Music playlists.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5199 --strictPort",
+    "build": "vite build",
+    "desktop": "npm run build && electron .",
+    "package:win": "npm run build && electron-builder --win portable --config.electronDist=node_modules/electron/dist --config.directories.output=release-portable",
+    "package:win:installer": "npm run build && electron-builder --win nsis --config.electronDist=node_modules/electron/dist --config.directories.output=release-installer",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "latest",
+    "lucide-react": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "vite": "latest"
+  },
+  "devDependencies": {
+    "electron": "latest",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.dailydiscovery.app",
+    "productName": "Daily Discovery",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "artifactName": "Daily-Discovery-${version}-${arch}.${ext}",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Daily Discovery"
+    },
+    "portable": {
+      "artifactName": "Daily-Discovery-${version}-portable.${ext}"
+    }
+  }
+}

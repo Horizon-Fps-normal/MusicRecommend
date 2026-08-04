@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#111827" />
+    <title>Daily Discovery</title>
+  </head>
+  <body>
+    <div id="root">
+      <div id="file-launcher" style="display:none;min-height:100vh;box-sizing:border-box;padding:64px;background:#0e1420;color:#eef2f8;font-family:'Segoe UI','Microsoft YaHei',sans-serif">
+        <div style="max-width:620px;margin:10vh auto;padding:36px;border:1px solid rgba(255,255,255,.12);border-radius:20px;background:#151d2c;box-shadow:0 20px 60px rgba(0,0,0,.3)">
+          <div style="display:inline-block;padding:8px 12px;border-radius:10px;background:#f2b84b;color:#1b1710;font-weight:700;letter-spacing:.12em">DAILY DISCOVERY</div>
+          <h1 style="font-size:32px;margin:28px 0 12px">应用没有启动</h1>
+          <p style="color:#9aa6b8;line-height:1.8">你打开的是源码文件，不能直接双击运行。请返回文件夹，双击：</p>
+          <p style="padding:14px 16px;background:#101825;border-radius:10px;color:#f2b84b;font-weight:700">启动 Daily Discovery.cmd</p>
+          <p style="color:#718096;line-height:1.8">或者在 PowerShell 中运行：<br><code style="color:#d8e1ed">npm.cmd run dev</code>，然后打开 <code style="color:#d8e1ed">http://127.0.0.1:5199</code></p>
+        </div>
+      </div>
+    </div>
+    <script>
+      if (window.location.protocol === 'file:' && !window.qqMusic) document.getElementById('file-launcher').style.display = 'block';
+    </script>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
