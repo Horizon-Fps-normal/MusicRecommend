@@ -45,6 +45,10 @@ function dayKey() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function comparableKey(track) {
+  return `${String(track?.title ?? '').trim().toLowerCase()}::${String(track?.artist ?? '').trim().toLowerCase()}`;
+}
+
 function stableDailyScore(track) {
   const dailyVariation = (hash(`${dayKey()}:${track.id}`) % 1000) / 1000;
   const energyFit = 100 - Math.abs(track.energy - 55);
@@ -55,12 +59,15 @@ export function hasRealPlaylistTracks(playlist) {
   return Array.isArray(playlist?.tracks) && playlist.tracks.length > 0;
 }
 
-export function buildRecommendations({ playlist, fallbackCandidates, amount, excluded = new Set(), rejected = new Set() }) {
+export function buildRecommendations({ playlist, fallbackCandidates, amount, excluded = new Set(), rejected = new Set(), blockedTracks = [], sourceType = 'playlist' }) {
   const fromPlaylist = hasRealPlaylistTracks(playlist);
   const source = fromPlaylist ? playlist.tracks : fallbackCandidates;
+  const blockedIds = new Set(blockedTracks.map((track) => String(track.id ?? track.qqMid ?? '')).filter(Boolean));
+  const blockedKeys = new Set(blockedTracks.map(comparableKey));
+  const isPlaylistSource = fromPlaylist && sourceType === 'playlist';
   const normalized = source
-    .map((track) => normalizeTrack(track, fromPlaylist))
-    .filter((track) => track.title && !excluded.has(track.id) && !rejected.has(track.id));
+    .map((track) => normalizeTrack(track, isPlaylistSource))
+    .filter((track) => track.title && !excluded.has(track.id) && !rejected.has(track.id) && !blockedIds.has(track.id) && !blockedKeys.has(comparableKey(track)));
 
   const eligible = normalized.filter((track) => track.popularity >= MIN_POPULARITY);
   const pool = (eligible.length >= amount ? eligible : normalized).sort((a, b) => stableDailyScore(b) - stableDailyScore(a));

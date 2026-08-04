@@ -94,6 +94,62 @@ ipcMain.handle('qqmusic:import-public-playlist', async (_event, input) => {
   };
 });
 
+function searchSongKey(title, artist) {
+  return `${String(title ?? '').trim().toLowerCase()}::${String(artist ?? '').trim().toLowerCase()}`;
+}
+
+function normalizeSearchSong(song) {
+  const qqMid = song.songmid ?? song.mid ?? null;
+  const artist = song.singername ?? ((song.singer ?? []).map((singer) => singer.name).join(' / '));
+  const albumMid = song.albummid ?? song.album?.mid ?? null;
+  return {
+    id: qqMid,
+    qqMid,
+    title: song.songname ?? song.name ?? '',
+    artist,
+    album: song.albumname ?? song.album?.name ?? '',
+    cover: albumMid ? `https://y.gtimg.cn/music/photo_new/T002R300x300M000${albumMid}.jpg` : null,
+    url: qqMid ? `https://y.qq.com/n/ryqq/songDetail/${qqMid}` : null,
+    duration: song.interval ? `${Math.floor(song.interval / 60).toString().padStart(2, '0')}:${(song.interval % 60).toString().padStart(2, '0')}` : '',
+    playbackUrl: null,
+    tag: '歌单外探索',
+  };
+}
+
+async function searchQQSongs(query, limit = 20) {
+  const endpoint = `https://c.y.qq.com/soso/fcgi-bin/client_search_cp?format=json&p=1&n=${limit}&w=${encodeURIComponent(query)}`;
+  const response = await fetch(endpoint, { headers: { Referer: 'https://y.qq.com/', 'User-Agent': 'Mozilla/5.0' } });
+  if (!response.ok) throw new Error(`QQ 音乐搜索返回 HTTP ${response.status}`);
+  const payload = await response.json();
+  return payload?.data?.song?.list ?? payload?.song?.list ?? [];
+}
+
+ipcMain.handle('qqmusic:discover-tracks', async (_event, { seeds = [], excludedTracks = [], limit = 80 } = {}) => {
+  const excludedMids = new Set(excludedTracks.map((track) => String(track.qqMid ?? track.id ?? '')).filter(Boolean));
+  const excludedKeys = new Set(excludedTracks.map((track) => searchSongKey(track.title, track.artist)));
+  const artists = [...new Set(seeds
+    .flatMap((track) => String(track.artist ?? '').split(/\s*[/、,&]\s*/))
+    .map((artist) => artist.trim())
+    .filter(Boolean))].slice(0, 10);
+  if (artists.length === 0) return [];
+
+  const responses = await Promise.allSettled(artists.map((artist) => searchQQSongs(artist, 20)));
+  const seen = new Set();
+  const discovered = [];
+  for (const response of responses) {
+    if (response.status !== 'fulfilled') continue;
+    for (const song of response.value) {
+      const track = normalizeSearchSong(song);
+      const key = searchSongKey(track.title, track.artist);
+      if (!track.id || !track.title || seen.has(track.id) || excludedMids.has(String(track.id)) || excludedKeys.has(key)) continue;
+      seen.add(track.id);
+      discovered.push(track);
+      if (discovered.length >= Math.max(1, Math.min(200, Number(limit) || 80))) return discovered;
+    }
+  }
+  return discovered;
+});
+
 ipcMain.handle('qqmusic:play-track', async (_event, { audioUrl, webUrl }) => {
   if (audioUrl) {
     const parsedAudioUrl = new URL(audioUrl);

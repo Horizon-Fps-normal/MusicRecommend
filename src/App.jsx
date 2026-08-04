@@ -289,9 +289,33 @@ function App() {
     setTimeout(() => setNotice(''), 2600);
   }
 
-  function buildDailyRecommendations(amount, excluded = new Set()) {
+  function buildDailyRecommendations(amount, excluded = new Set(), externalCandidates = []) {
     const rejected = new Set(Object.entries(state.feedback).filter(([, value]) => value === 'dislike').map(([id]) => id));
-    return buildRecommendations({ playlist: activePlaylist, fallbackCandidates: CANDIDATES, amount, excluded, rejected });
+    const hasExternalCandidates = externalCandidates.length > 0;
+    return buildRecommendations({
+      playlist: hasExternalCandidates ? { tracks: [] } : (usingRealPlaylist ? { tracks: [] } : activePlaylist),
+      fallbackCandidates: hasExternalCandidates ? [...externalCandidates, ...CANDIDATES] : CANDIDATES,
+      amount,
+      excluded,
+      rejected,
+      blockedTracks: usingRealPlaylist ? activePlaylist.tracks : [],
+      sourceType: hasExternalCandidates ? 'discovery' : 'demo',
+    });
+  }
+
+  async function discoverExternalCandidates(amount) {
+    if (!usingRealPlaylist || !window.qqMusic?.discoverTracks) return [];
+    const seeds = activePlaylist.tracks.filter((track) => track.artist && track.title).slice(0, 12);
+    if (seeds.length === 0) return [];
+    try {
+      return await window.qqMusic.discoverTracks({
+        seeds,
+        excludedTracks: activePlaylist.tracks,
+        limit: Math.max(60, amount * 8),
+      });
+    } catch {
+      return [];
+    }
   }
 
   async function enrichTracks(tracks) {
@@ -311,15 +335,16 @@ function App() {
   async function generate() {
     const requested = Math.max(1, Math.min(40, Number(count) || 1));
     setIsGenerating(true);
-    setNotice('正在匹配 QQ 音乐封面与播放信息…');
-    const tracks = await enrichTracks(buildDailyRecommendations(requested, recentExcluded));
+    setNotice(usingRealPlaylist ? '正在寻找歌单之外的相关歌曲…' : '正在匹配 QQ 音乐封面与播放信息…');
+    const externalCandidates = await discoverExternalCandidates(requested);
+    const tracks = await enrichTracks(buildDailyRecommendations(requested, recentExcluded, externalCandidates));
     const entry = { id: `history-${Date.now()}`, createdAt: new Date().toISOString(), source: activePlaylist?.name ?? '常听收藏', requested, trackIds: tracks.map((track) => track.id), tracks };
     const next = { ...state, recommendations: tracks, history: [entry, ...state.history].slice(0, 50) };
     commit(next);
     setIsGenerating(false);
     const resultLabel = tracks.length < requested
       ? `可用歌曲不足，已生成 ${tracks.length} 首（目标 ${requested} 首）`
-      : `${usingRealPlaylist ? '已基于真实歌单生成' : '当前使用演示候选生成'} ${tracks.length} 首今日推荐`;
+      : `${externalCandidates.length ? '已基于歌单画像探索新歌' : usingRealPlaylist ? '未找到足够歌单外歌曲，使用备用探索池' : '当前使用演示候选生成'} ${tracks.length} 首今日推荐`;
     setNotice(resultLabel);
     setTimeout(() => setNotice(''), 2600);
   }
@@ -375,7 +400,8 @@ function App() {
 
   async function replace(trackId) {
     const excluded = new Set([...state.recommendations.map((track) => track.id), trackId]);
-    const replacement = (await enrichTracks(buildDailyRecommendations(1, excluded)))[0];
+    const externalCandidates = await discoverExternalCandidates(8);
+    const replacement = (await enrichTracks(buildDailyRecommendations(1, excluded, externalCandidates)))[0];
     if (!replacement) return;
     const tracks = state.recommendations.map((track) => track.id === trackId ? replacement : track);
     commit({ ...state, recommendations: tracks });
