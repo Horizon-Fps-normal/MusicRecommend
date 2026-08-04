@@ -102,6 +102,15 @@ function artistSignature(value) {
   return String(value ?? '').trim().toLowerCase().split(/\s*[/、,&]\s*/)[0];
 }
 
+const LOW_QUALITY_VERSION_PATTERN = /(?:\blive\b|live版|现场版?|演唱会|\bdj\b|dj版|remix|rework|sped\s*up|speed\s*up|加速|倍速|快版|\bslow(?:ed)?\b|slowed\s*\+?\s*reverb|慢速|降速|片段|试听|preview|snippet|铃声|片头|片尾|伴奏|demo)/i;
+
+function isPreferredSearchSong(song) {
+  const label = `${song?.songname ?? song?.title ?? ''} ${song?.albumname ?? song?.album ?? ''}`.trim();
+  if (LOW_QUALITY_VERSION_PATTERN.test(label)) return false;
+  const interval = Number(song?.interval ?? song?.durationSeconds ?? 0);
+  return !(Number.isFinite(interval) && interval > 0 && interval < 90);
+}
+
 function normalizeSearchSong(song, metadata = {}) {
   const qqMid = song.songmid ?? song.mid ?? null;
   const artist = song.singername ?? ((song.singer ?? []).map((singer) => singer.name).join(' / '));
@@ -115,6 +124,7 @@ function normalizeSearchSong(song, metadata = {}) {
     cover: albumMid ? `https://y.gtimg.cn/music/photo_new/T002R300x300M000${albumMid}.jpg` : null,
     url: qqMid ? `https://y.qq.com/n/ryqq/songDetail/${qqMid}` : null,
     duration: song.interval ? `${Math.floor(song.interval / 60).toString().padStart(2, '0')}:${(song.interval % 60).toString().padStart(2, '0')}` : '',
+    durationSeconds: Number(song.interval) || null,
     playbackUrl: null,
     genre: metadata.genre ?? '待识别曲风',
     mood: metadata.mood ?? '待识别氛围',
@@ -170,7 +180,7 @@ async function searchChartSong(song) {
   const query = `${song.songname ?? ''} ${song.singername ?? ''}`.trim();
   if (!query) return [];
   const songs = await searchQQSongs(query, 5);
-  return songs.map((candidate) => normalizeSearchSong(candidate, {
+  return songs.filter(isPreferredSearchSong).map((candidate) => normalizeSearchSong(candidate, {
     genre: song.chart.genre,
     mood: song.chart.mood,
     energy: song.chart.energy,
@@ -202,7 +212,7 @@ ipcMain.handle('qqmusic:discover-tracks', async (_event, { seeds = [], excludedT
   const artistResponses = await Promise.allSettled(artistQueries.map(({ artist, page }) => searchQQSongs(artist, 50, page)));
   const artistSongs = artistResponses
     .filter((response) => response.status === 'fulfilled')
-    .flatMap((response, index) => response.value.map((song) => normalizeSearchSong(song, {
+    .flatMap((response, index) => response.value.filter(isPreferredSearchSong).map((song) => normalizeSearchSong(song, {
       discoverySource: 'artist-neighbor',
       sourceGroup: 'playlist-artist',
       tag: '相近歌手探索',
@@ -221,7 +231,7 @@ ipcMain.handle('qqmusic:discover-tracks', async (_event, { seeds = [], excludedT
   const discovered = [];
   for (const track of sourceSongs) {
     const key = searchSongKey(track.title, track.artist);
-    if (!track.id || !track.title || seen.has(track.id) || excludedMids.has(String(track.id)) || excludedKeys.has(key)) continue;
+    if (!track.id || !track.title || !isPreferredSearchSong(track) || seen.has(track.id) || excludedMids.has(String(track.id)) || excludedKeys.has(key)) continue;
     seen.add(track.id);
     discovered.push(track);
     if (discovered.length >= Math.max(1, Math.min(800, Number(limit) || 240))) break;
@@ -256,7 +266,7 @@ ipcMain.handle('qqmusic:resolve-track', async (_event, { title, artist }) => {
   if (!response.ok) throw new Error(`QQ 音乐搜索返回 HTTP ${response.status}`);
   const payload = await response.json();
   const songs = payload?.data?.song?.list ?? payload?.song?.list ?? [];
-  const song = songs[0];
+  const song = songs.find(isPreferredSearchSong);
   if (!song) return null;
   const qqMid = song.songmid ?? song.mid ?? null;
   const albumMid = song.albummid ?? song.album?.mid ?? null;

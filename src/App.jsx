@@ -28,7 +28,7 @@ import {
   X,
 } from 'lucide-react';
 import { CANDIDATES, NAV_ITEMS } from './data';
-import { buildRecommendations, buildTasteProfile, hasRealPlaylistTracks } from './recommendation';
+import { buildRecommendations, buildTasteProfile, hasRealPlaylistTracks, isPreferredTrackVersion } from './recommendation';
 import { daysSince, loadState, saveState } from './storage';
 
 const ICONS = { sparkles: Sparkles, library: LibraryBig, history: HistoryIcon, heart: Heart };
@@ -328,7 +328,8 @@ function App() {
       if (track.qqMid && track.cover) return track;
       try {
         const resolved = await window.qqMusic.resolveTrack({ title: track.title, artist: track.artist });
-        return resolved ? { ...track, ...resolved } : track;
+        const merged = resolved ? { ...track, ...resolved } : track;
+        return isPreferredTrackVersion(merged) ? merged : track;
       } catch {
         return track;
       }
