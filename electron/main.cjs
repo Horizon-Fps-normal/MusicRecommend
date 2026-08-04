@@ -98,7 +98,7 @@ function searchSongKey(title, artist) {
   return `${String(title ?? '').trim().toLowerCase()}::${String(artist ?? '').trim().toLowerCase()}`;
 }
 
-function normalizeSearchSong(song) {
+function normalizeSearchSong(song, metadata = {}) {
   const qqMid = song.songmid ?? song.mid ?? null;
   const artist = song.singername ?? ((song.singer ?? []).map((singer) => singer.name).join(' / '));
   const albumMid = song.albummid ?? song.album?.mid ?? null;
@@ -112,7 +112,12 @@ function normalizeSearchSong(song) {
     url: qqMid ? `https://y.qq.com/n/ryqq/songDetail/${qqMid}` : null,
     duration: song.interval ? `${Math.floor(song.interval / 60).toString().padStart(2, '0')}:${(song.interval % 60).toString().padStart(2, '0')}` : '',
     playbackUrl: null,
-    tag: '歌单外探索',
+    genre: metadata.genre ?? '待识别曲风',
+    mood: metadata.mood ?? '待识别氛围',
+    energy: metadata.energy ?? null,
+    popularity: metadata.popularity ?? null,
+    discoverySource: metadata.discoverySource ?? 'qq-search',
+    tag: metadata.tag ?? '歌单外探索',
   };
 }
 
@@ -124,28 +129,91 @@ async function searchQQSongs(query, limit = 20) {
   return payload?.data?.song?.list ?? payload?.song?.list ?? [];
 }
 
-ipcMain.handle('qqmusic:discover-tracks', async (_event, { seeds = [], excludedTracks = [], limit = 80 } = {}) => {
+const QQ_CHARTS = [
+  { id: 4, genre: '华语流行', mood: '热门', energy: 62, tag: '流行指数' },
+  { id: 26, genre: '流行', mood: '热门', energy: 65, tag: '热歌榜' },
+  { id: 27, genre: '流行', mood: '新鲜', energy: 64, tag: '新歌榜' },
+  { id: 57, genre: '电子', mood: '高能', energy: 82, tag: '电音榜' },
+  { id: 58, genre: '说唱', mood: '高能', energy: 78, tag: '说唱榜' },
+  { id: 62, genre: '流行', mood: '上升', energy: 70, tag: '飙升榜' },
+  { id: 3, genre: '欧美流行', mood: '明亮', energy: 66, tag: '欧美榜' },
+  { id: 16, genre: '韩流流行', mood: '明亮', energy: 72, tag: '韩国榜' },
+];
+
+function parseQQJsonp(text) {
+  const start = text.indexOf('(');
+  const end = text.lastIndexOf(')');
+  if (start < 0 || end <= start) return null;
+  try {
+    return JSON.parse(text.slice(start + 1, end));
+  } catch {
+    return null;
+  }
+}
+
+async function fetchQQChartPreview(chart) {
+  const endpoint = `https://c.y.qq.com/v8/fcg-bin/fcg_myqq_toplist.fcg?uin=0&needNewCode=1&platform=h5&g_tk=5381`;
+  const response = await fetch(endpoint, { headers: { Referer: 'https://y.qq.com/', 'User-Agent': 'Mozilla/5.0' } });
+  if (!response.ok) throw new Error(`QQ 榜单返回 HTTP ${response.status}`);
+  const payload = parseQQJsonp(await response.text());
+  const item = (payload?.data?.topList ?? []).find((entry) => Number(entry.id) === chart.id);
+  return (item?.songList ?? []).map((song) => ({ ...song, chart }));
+}
+
+async function searchChartSong(song) {
+  const query = `${song.songname ?? ''} ${song.singername ?? ''}`.trim();
+  if (!query) return [];
+  const songs = await searchQQSongs(query, 5);
+  return songs.map((candidate) => normalizeSearchSong(candidate, {
+    genre: song.chart.genre,
+    mood: song.chart.mood,
+    energy: song.chart.energy,
+    popularity: song.chart.id === 26 || song.chart.id === 62 ? 90 : 82,
+    discoverySource: 'qq-chart',
+    tag: `QQ ${song.chart.tag}`,
+  }));
+}
+
+async function discoverChartSongs() {
+  const previews = (await Promise.allSettled(QQ_CHARTS.map(fetchQQChartPreview)))
+    .filter((result) => result.status === 'fulfilled')
+    .flatMap((result) => result.value);
+  return (await Promise.allSettled(previews.map(searchChartSong)))
+    .filter((result) => result.status === 'fulfilled')
+    .flatMap((result) => result.value);
+}
+
+ipcMain.handle('qqmusic:discover-tracks', async (_event, { seeds = [], excludedTracks = [], profile = null, limit = 80 } = {}) => {
   const excludedMids = new Set(excludedTracks.map((track) => String(track.qqMid ?? track.id ?? '')).filter(Boolean));
   const excludedKeys = new Set(excludedTracks.map((track) => searchSongKey(track.title, track.artist)));
   const artists = [...new Set(seeds
     .flatMap((track) => String(track.artist ?? '').split(/\s*[/、,&]\s*/))
     .map((artist) => artist.trim())
     .filter(Boolean))].slice(0, 10);
-  if (artists.length === 0) return [];
-
-  const responses = await Promise.allSettled(artists.map((artist) => searchQQSongs(artist, 20)));
+  const artistResponses = await Promise.allSettled(artists.map((artist) => searchQQSongs(artist, 20)));
+  const artistSongs = artistResponses
+    .filter((response) => response.status === 'fulfilled')
+    .flatMap((response) => response.value.map((song) => normalizeSearchSong(song, {
+      discoverySource: 'artist-neighbor',
+      tag: '相近歌手探索',
+      popularity: 78,
+    })));
+  const chartSongs = await discoverChartSongs();
+  const sourceSongs = [];
+  const sourceLength = Math.max(artistSongs.length, chartSongs.length);
+  for (let index = 0; index < sourceLength; index += 1) {
+    if (chartSongs[index]) sourceSongs.push(chartSongs[index]);
+    if (artistSongs[index]) sourceSongs.push(artistSongs[index]);
+  }
+  if (sourceSongs.length === 0 && !profile) return [];
   const seen = new Set();
   const discovered = [];
-  for (const response of responses) {
-    if (response.status !== 'fulfilled') continue;
-    for (const song of response.value) {
-      const track = normalizeSearchSong(song);
-      const key = searchSongKey(track.title, track.artist);
-      if (!track.id || !track.title || seen.has(track.id) || excludedMids.has(String(track.id)) || excludedKeys.has(key)) continue;
-      seen.add(track.id);
-      discovered.push(track);
-      if (discovered.length >= Math.max(1, Math.min(200, Number(limit) || 80))) return discovered;
-    }
+  for (const track of sourceSongs) {
+    const key = searchSongKey(track.title, track.artist);
+    if (!track.id || !track.title || seen.has(track.id) || excludedMids.has(String(track.id)) || excludedKeys.has(key)) continue;
+    seen.add(track.id);
+    discovered.push(track);
+    if (discovered.length >= Math.max(1, Math.min(240, Number(limit) || 80))) break;
   }
   return discovered;
 });

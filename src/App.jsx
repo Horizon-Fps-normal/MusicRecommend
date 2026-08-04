@@ -28,7 +28,7 @@ import {
   X,
 } from 'lucide-react';
 import { CANDIDATES, NAV_ITEMS } from './data';
-import { buildRecommendations, hasRealPlaylistTracks } from './recommendation';
+import { buildRecommendations, buildTasteProfile, hasRealPlaylistTracks } from './recommendation';
 import { daysSince, loadState, saveState } from './storage';
 
 const ICONS = { sparkles: Sparkles, library: LibraryBig, history: HistoryIcon, heart: Heart };
@@ -144,6 +144,7 @@ function App() {
 
   const activePlaylist = state.playlists.find((playlist) => playlist.id === sourceId) ?? state.playlists[0];
   const usingRealPlaylist = hasRealPlaylistTracks(activePlaylist);
+  const tasteProfile = useMemo(() => buildTasteProfile(activePlaylist?.tracks ?? []), [activePlaylist]);
   const detailPlaylist = state.playlists.find((playlist) => playlist.id === selectedPlaylistId);
   const detailTracks = (detailPlaylist?.tracks ?? []).filter((track) => `${track.title} ${track.artist} ${track.album}`.toLowerCase().includes(playlistSearch.trim().toLowerCase()));
   const feedbackValues = Object.values(state.feedback);
@@ -300,6 +301,7 @@ function App() {
       rejected,
       blockedTracks: usingRealPlaylist ? activePlaylist.tracks : [],
       sourceType: hasExternalCandidates ? 'discovery' : 'demo',
+      profile: tasteProfile,
     });
   }
 
@@ -311,6 +313,7 @@ function App() {
       return await window.qqMusic.discoverTracks({
         seeds,
         excludedTracks: activePlaylist.tracks,
+        profile: tasteProfile,
         limit: Math.max(60, amount * 8),
       });
     } catch {
@@ -335,7 +338,7 @@ function App() {
   async function generate() {
     const requested = Math.max(1, Math.min(40, Number(count) || 1));
     setIsGenerating(true);
-    setNotice(usingRealPlaylist ? '正在寻找歌单之外的相关歌曲…' : '正在匹配 QQ 音乐封面与播放信息…');
+    setNotice(usingRealPlaylist ? '正在综合曲风、节奏、氛围与热度寻找歌单外新歌…' : '正在匹配 QQ 音乐封面与播放信息…');
     const externalCandidates = await discoverExternalCandidates(requested);
     const tracks = await enrichTracks(buildDailyRecommendations(requested, recentExcluded, externalCandidates));
     const entry = { id: `history-${Date.now()}`, createdAt: new Date().toISOString(), source: activePlaylist?.name ?? '常听收藏', requested, trackIds: tracks.map((track) => track.id), tracks };
@@ -344,7 +347,7 @@ function App() {
     setIsGenerating(false);
     const resultLabel = tracks.length < requested
       ? `可用歌曲不足，已生成 ${tracks.length} 首（目标 ${requested} 首）`
-      : `${externalCandidates.length ? '已基于歌单画像探索新歌' : usingRealPlaylist ? '未找到足够歌单外歌曲，使用备用探索池' : '当前使用演示候选生成'} ${tracks.length} 首今日推荐`;
+      : `${externalCandidates.length ? '已基于歌单画像探索不同歌手的新歌' : usingRealPlaylist ? '未找到足够歌单外歌曲，使用备用探索池' : '当前使用演示候选生成'} ${tracks.length} 首今日推荐`;
     setNotice(resultLabel);
     setTimeout(() => setNotice(''), 2600);
   }

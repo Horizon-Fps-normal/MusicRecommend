@@ -37,7 +37,9 @@ QQ 音乐公开搜索和歌单接口只用于元数据，不负责控制本地 Q
 
 ## Recommendation behavior
 
-- Imported playlist track data is now the primary recommendation source; the demo candidate list is only a fallback before a real playlist is connected.
+- An imported playlist is treated as a taste profile, not as the recommendation pool. Discovery combines neighboring songs from playlist artists with multiple QQ public chart categories, so new artists can be recommended.
+- Ranking uses normalized genre family, mood family, estimated energy/rhythm level, popularity, chart source, artist novelty, feedback, and recent-history exclusion. QQ's public song search does not expose reliable acoustic features, so rhythm and mood are metadata-based estimates rather than audio analysis.
+- Existing playlist tracks are excluded by QQ songmid and by normalized title/artist. Daily generation keeps at most one song per artist when enough distinct artists are available.
 - Daily generation applies 90-day history exclusion, dislike exclusion, popularity filtering when metadata exists, and one track per artist.
 - The artist rule relaxes only when the source cannot provide enough distinct artists, and the UI reports when the requested quantity cannot be reached.
 
@@ -48,4 +50,4 @@ npm.cmd install
 npm.cmd run package:win
 ```
 
-The portable executable is written to `release-portable/Daily-Discovery-0.1.0-portable.exe`. An NSIS installer can be attempted with `npm.cmd run package:win:installer`; on some Windows machines, antivirus or controlled-folder protection may block the final installer file even though the unpacked application has been built successfully.
+The portable executable is written to `release-portable/Daily-Discovery-0.3.0-portable.exe`. An NSIS installer can be attempted with `npm.cmd run package:win:installer`; on some Windows machines, antivirus or controlled-folder protection may block the final installer file even though the unpacked application has been built successfully.
